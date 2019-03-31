@@ -1,0 +1,148 @@
+
+# Android View 事件分发机制
+# 简介:
+> 本文章介绍的是 View 事件分发. 首先在这里，不过多的分析事件分发的源码了，有兴趣的可以去看一看[郭霖的博客](https://blog.csdn.net/guolin_blog/article/details/9097463/)和[鸿洋的博客](https://blog.csdn.net/lmj623565791/article/details/38960443)，对源码分析讲的非常清楚，在这里我主要讲解一些我自己对它的理解。
+# 目录:
+[1.  认识三个方法](#1)
+[2. 完整的执行流程注意事项](#2)
+[3. 完整的执行流程注意事项](#2)
+[4. 解决滑动冲突的问题](#3)
+###  <span id = "1">**1. 我们先在这里认识三个方法**</span>
+
+- dispatchTouchEvent(MotionEvent ev) //用来进行事件的分发
+- onInterceptTouchEvent(MotionEvent ev) //在 dispatchTouchEvent()中调用，用来判断是否拦截某个事件
+- onTouchEvent(MotionEvent ev)    //在 dispatchTouchEvent()中调用，用来处理点击事件
+伪代码分析,便于理解：
+```
+          public boolean dispatchTouchEvent(MotionEvent ev){
+                 boolean consume = false;
+                 if(onInterceptTouchEvent(ev)){
+                      consume = onTouchEvent(ev); 
+                 } else{
+                     consum = child.dispatchTouchEvent(ev);
+                 }
+　　　　　　return consum;
+          }
+
+ ```
+### <span id = "1">**2. 首先将事件分发机制按两个主角分开讲，一个是 ViewGroup，一个是 View**</span>
+
+  #####  对于 ViewGroup 而言 
+
+> 当一个点击事件产生后，dispatchTouchEvent()方法调用。如果 onInterceptTouchEvent()方法返回true表示事件被拦截，返回 false 则该事件会交给子View继续执行上述步骤，直至事件被处理。
+#####对于 View 而言
+> 处理事件，设置 onTouchEventListener()，onTouch()回调，返回 false，onTouchEvent()会被调用，若此时设置了 setOnClickListener()，则 onClick()方法会被调用。返回 true，onTouchEvent()不会被调用，此时设置了 setOnClickListener()，则 onClick()方法并不会被调用。这便是 View 的分发机制。
+ 继续根据流程，先分析 View 的 dispatchTouchEvent()方法，看源码。
+
+##### 先分析 View 的 dispatchTouchEvent()方法，看源码。
+```
+public boolean dispatchTouchEvent(MotionEvent event) {
+        // If the event should be handled by accessibility focus first.
+        if (event.isTargetAccessibilityFocus()) {
+            // We don't have focus or no virtual descendant has it, do not handle the event.
+            if (!isAccessibilityFocusedViewOrHost()) {
+                return false;
+            }
+            // We have focus and got the event, then use normal event dispatch.
+            event.setTargetAccessibilityFocus(false);
+        }
+
+        boolean result = false;
+
+        if (mInputEventConsistencyVerifier != null) {
+            mInputEventConsistencyVerifier.onTouchEvent(event, 0);
+        }
+
+        final int actionMasked = event.getActionMasked();
+        if (actionMasked == MotionEvent.ACTION_DOWN) {
+            // Defensive cleanup for new gesture
+            stopNestedScroll();
+        }
+
+        if (onFilterTouchEventForSecurity(event)) {
+            //noinspection SimplifiableIfStatement
+            ListenerInfo li = mListenerInfo;
+            if (li != null && li.mOnTouchListener != null
+                    && (mViewFlags & ENABLED_MASK) == ENABLED
+                    && li.mOnTouchListener.onTouch(this, event)) {
+                result = true;
+            }
+
+            if (!result && onTouchEvent(event)) {
+                result = true;
+            }
+        }
+
+        if (!result && mInputEventConsistencyVerifier != null) {
+            mInputEventConsistencyVerifier.onUnhandledEvent(event, 0);
+        }
+
+        // Clean up after nested scrolls if this is the end of a gesture;
+        // also cancel it if we tried an ACTION_DOWN but we didn't want the rest
+        // of the gesture.
+        if (actionMasked == MotionEvent.ACTION_UP ||
+                actionMasked == MotionEvent.ACTION_CANCEL ||
+                (actionMasked == MotionEvent.ACTION_DOWN && !result)) {
+            stopNestedScroll();
+        }
+
+        return result;
+    }
+```
+主要看下分析 onTouch 方法和 onTouchEvent 方法
+
+首先进入 onTouch 方法的源码
+```
+boolean onTouch(View v, MotionEvent event);
+```
+**接着看 onTouchEvent() 方法，很长可以简略未一下几点**
+- 我们可以看到如果控件是 disabled 的同时是可以 clickable 的则 onTouchEvent 直接消费事件返回 true，反之如果控件（View）是 disenable 状态，同时是 disclickable 的则 onTouchEvent 直接false。
+ - 看到如果是 disclickable 的那么返回false
+- 一个 switch 判断 event 的类型，对每个类型进行了适当的分析，整个 View 的事件转发流程是：
+>View.dispatchEvent->View.setOnTouchListener->View.onTouchEvent 在 dispatchTouchEvent 中会进行OnTouchListener 的判断，如果 OnTouchListener 不为 null 且返回 true，则表示事件被消费，onTouchEvent 不会被执行；否则执行 onTouchEvent。
+
+### <span id="1">3. 完整的执行流程注意事项</span>
+> 点击事件产生后，遵循如下顺序 Activity->Window->View。
+> 当所有 View 都不处理事件时（onTouchEvent() 返回 false），事件会交还给 Activity 处理。
+> onTouch 和 onTouchEvent，都是在 dispatchTouchEvent() 中调用，onTouch 优先于 onTouchEvent 执行。如果在 onTouch 方法中通过返回 true 将事件消费掉,onTouchEvent 将不会再执行。另外需要注意的是，onTouch 能够得到执行需要两个前提条件:
+>> 第一  mOnTouchListener 的值不能为空。
+>> 第二当前点击的控件必须是 enable 的。因此如果你有一个控件是非 enable 的，那么给它注册 onTouch 事件将永远得不到执行。对于这一类控件，如果我们想要监听它的 touch 事件，就必须通过在该控件中重写 onTouchEvent 方法来实现。
+### <span id="4">4. 解决滑动冲突的问题</span>
+### scrollview 和 recyclerView 的滑动冲突
+> 消费纵向的滑动，横向的滑动不变。
+>对于横向位移增量小于于竖向位移增量，即竖直滑动，则ScrollView 拦截事件。
+```
+ /**
+     * 让父控件 ScrollView 直接拦截滑动事件，不向下分发给 RecyclerView，
+     * 具体是定义一个ScrollView子类，重写其 onInterceptTouchEvent()方法
+     */
+  public boolean onInterceptTouchEvent(MotionEvent ev){
+
+        int action=ev.getAction();
+        boolean interception=false;
+        switch (action){
+            case MotionEvent.ACTION_DOWN:
+                downX=(int)ev.getRawX();
+                downY=(int)ev.getRawY();
+                break;
+            case MotionEvent.ACTION_MOVE:
+                int moveY = (int) ev.getRawY();
+                int moveX = (int) ev.getRawX();
+                if (Math.abs(moveY - downY) > Math.abs(moveX - downX)) {
+                    interception = true;
+                    return true;
+
+                } else {
+                    return false;
+                }
+
+//                if(Math.abs(moveX-downX)>mTouchSlop){
+//                   interception=false;
+//                   return false;
+//                }
+            default:
+                break;
+        }
+        return  super.onInterceptTouchEvent(ev);
+    }
+```
