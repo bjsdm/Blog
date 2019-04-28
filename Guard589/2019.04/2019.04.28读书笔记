@@ -1,0 +1,292 @@
+# Android IPC机制的Binder
+
+## 目录:
+[1.  Binder 的特点](#1)
+[2. Binder 原理简单介绍](#2)
+[3. Binder 的使用分析 ](#3)
+[4. 使用 AIDL 跨进程通信](#4)
+[5. Android使用Binder作为主要进程间通讯机制](#5)
+###  <span id = "1">**1. Binder的特点**</span>
+（1）Binder 是一种同步的通信方式。
+（2）传输的数据都是采用函数参数的形式进行的
+（3）高性能，使用 ioctl 来进行通信，会绕开文件系统缓冲，达到实时交互的目的
+（4）安全，以进程为单位进行通信，进程运行时的 uid/gid 也会在 Binder 通信时被用于权限判断
+例如：Binder是Android进程间通信的主要机制，Activity与Service主要依赖binder进行通信
+
+###  <span id = "2">**2. Binder 原理简单介绍：**</span>
+Binder 是 Android 中的一个 class，实现了 IBinder 接口：
+>远程对象的基本接口，为高性能而设计的轻量级远程调用机制的核心部分。
+>既用于远程调用，也用于进程内调用。
+>IBinder定义了与远程对象交互的协议。
+>编程时，不要直接实现IBinder接口，而应该从Binder继承。
+**Binder 家族**
+![image.png](https://upload-images.jianshu.io/upload_images/13559775-6d54a9d298519871.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+三者之间的关系参考设计模式之代理模式
+
+ - 从 IPC 来说，Binder 是 Android 的一种跨进程通信方式。Binder 构建于 Linux 内核里的一个叫 binder 的驱动之上，系统里所有涉及 Binder 通信的部分，都通过与 /dev/binder 的设备驱动交互来得到信息互通的功能。而 binder 本身只是一种借用内存作后端的“伪驱动”，并不对应到硬件，而只是作用于一段内存区域。
+- 从 Android Framework 角度来说，Binder 是 ServiceManager 连接各种 Manger（ActivityManager，WindowManager等等）和相应 ManagerService 的桥梁。
+- 从 Android 应用层来说，Binder 是客户端和服务端进行通信的媒介，当 bindService 的时候，服务端会返回一个包含了服务端业务调用的 Binder 对象，通过这个 BInder 对象，客户端就可以获取服务端提供的服务或者数据，这里的服务包括普通服务和基于 AIDL 的服务。
+- Android 系统 Binder 机制中的四个组件 Client、Server、Service Manager 和 Binder 驱动程序，Binder 的工作机制图：
+![image.png](https://upload-images.jianshu.io/upload_images/13559775-016615e1440d553b.png?imageMogr2/auto-orient/strip%7CimageView2/2/w/1240)
+
+###  <span id = "3">**3. Binder 的使用分析**</span>
+1.用在 Service ：，较简单，不涉及进程间通信，不触及 Binder 的核心。
+2.用在Message：Message 的底层是AIDL。
+3.用在AIDL(Android Interface Definition Language)：
+###  <span id = "4">**4. 使用AIDL跨进程通信：**</span>
+- 第一步：建立我们需要的类对象
+- 第二步：建立第一种AIDL文件，定义我们的Parcelable对象
+- 第三步：建立第二种AIDL文件，定义我们的方法接口
+使用AIDL跨进程通信的服务端代码
+```
+public class MainActivity extends Activity {
+
+    private String TAG = "cilent";
+
+    //由AIDL文件生成的Java类
+    private IBookManager mBookManager = null;
+
+    //标志当前与服务端连接状况的布尔值，false为未连接，true为连接中
+    private boolean mBound = false;
+
+    //包含Book对象的list
+    private List<Book> mBooks;
+
+private static int mPrice = 10;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (!mBound) {
+            attemptToBindService();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        // TODO Auto-generated method stub
+        super.onStop();
+        if(mBound) {//如果绑定了， 才能解绑
+            unbindService(mServiceConnection);//一定要记得给service解绑
+        }
+    }
+
+    /**
+     * 按钮的点击事件
+     * @param view
+     */
+    public void addBook(View view) {
+        if(!mBound) {
+            //没绑定则去绑定服务端
+            attemptToBindService();
+            return;
+        }
+
+        Book book = new Book();
+        book.setName("android 开发艺术探索 " + System.currentTimeMillis());
+        book.setPrice(mPrice++);
+        try {
+            mBookManager.addBook(book);
+        } catch (RemoteException e) {
+            Log.e(TAG, " addBook RemoteException");
+            e.printStackTrace();
+        }
+
+    }
+
+    public void getBooks(View view) {
+        if(!mBound) {
+            //没绑定则去绑定服务端
+            attemptToBindService();
+            return;
+        }
+
+        try {
+            List<Book> books = mBookManager.getBookList();
+            Log.e(TAG, " getBooks: "+books.toString());
+        } catch (RemoteException e) {
+            Log.e(TAG, " addBook RemoteException");
+            e.printStackTrace();
+        }
+    }
+
+
+    /**
+     * 尝试与服务端进行连接
+     */
+    private void attemptToBindService() {
+        Intent intent = new Intent();
+        intent.setAction("com.example.my_chapter_2_mine"); //设置企图
+        intent.setPackage("com.example.my_chapter_2.service");//设置包名
+
+        bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE);
+
+    }
+
+    ServiceConnection mServiceConnection = new ServiceConnection() {
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            //一般不会走到这个回调， 除非是 service异常终止， 才会回调到这来
+            Log.e(TAG, "service disconnected");
+            mBound = false;
+
+        }
+
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            // 绑定成功后给的回调
+            Log.e(TAG, "service connected");
+            mBookManager = BookManagerImpl.asInterface(service); //初始化mBookManager
+            mBound = true;
+
+            if(mBookManager != null) {
+                try {
+                    mBooks = mBookManager.getBookList();
+                     Log.e(TAG, mBooks.toString());
+                } catch (RemoteException e) {
+                    Log.e(TAG, "RemoteException");
+                    e.printStackTrace();
+                }
+            }
+
+        }
+    };
+
+}
+```
+AIDL跨进程通信的客户端代码
+```
+public class MainActivity extends Activity {
+
+    private String TAG = "cilent";
+
+    //由AIDL文件生成的Java类
+    private IBookManager mBookManager = null;
+
+    //标志当前与服务端连接状况的布尔值，false为未连接，true为连接中
+    private boolean mBound = false;
+
+    //包含Book对象的list
+    private List<Book> mBooks;
+
+private static int mPrice = 10;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (!mBound) {
+            attemptToBindService();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        // TODO Auto-generated method stub
+        super.onStop();
+        if(mBound) {//如果绑定了， 才能解绑
+            unbindService(mServiceConnection);//一定要记得给service解绑
+        }
+    }
+
+    /**
+     * 按钮的点击事件
+     * @param view
+     */
+    public void addBook(View view) {
+        if(!mBound) {
+            //没绑定则去绑定服务端
+            attemptToBindService();
+            return;
+        }
+
+        Book book = new Book();
+        book.setName("android 开发艺术探索 " + System.currentTimeMillis());
+        book.setPrice(mPrice++);
+        try {
+            mBookManager.addBook(book);
+        } catch (RemoteException e) {
+            Log.e(TAG, " addBook RemoteException");
+            e.printStackTrace();
+        }
+
+    }
+
+    public void getBooks(View view) {
+        if(!mBound) {
+            //没绑定则去绑定服务端
+            attemptToBindService();
+            return;
+        }
+
+        try {
+            List<Book> books = mBookManager.getBookList();
+            Log.e(TAG, " getBooks: "+books.toString());
+        } catch (RemoteException e) {
+            Log.e(TAG, " addBook RemoteException");
+            e.printStackTrace();
+        }
+    }
+
+
+    /**
+     * 尝试与服务端进行连接
+     */
+    private void attemptToBindService() {
+        Intent intent = new Intent();
+        intent.setAction("com.example.my_chapter_2_mine"); //设置企图
+        intent.setPackage("com.example.my_chapter_2.service");//设置包名
+
+        bindService(intent, mServiceConnection, Context.BIND_AUTO_CREATE);
+
+    }
+
+    ServiceConnection mServiceConnection = new ServiceConnection() {
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) {
+            //一般不会走到这个回调， 除非是 service异常终止， 才会回调到这来
+            Log.e(TAG, "service disconnected");
+            mBound = false;
+
+        }
+
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder service) {
+            // 绑定成功后给的回调
+            Log.e(TAG, "service connected");
+            mBookManager = BookManagerImpl.asInterface(service); //初始化mBookManager
+            mBound = true;
+
+            if(mBookManager != null) {
+                try {
+                    mBooks = mBookManager.getBookList();
+                     Log.e(TAG, mBooks.toString());
+                } catch (RemoteException e) {
+                    Log.e(TAG, "RemoteException");
+                    e.printStackTrace();
+                }
+            }
+
+        }
+    };
+
+}
+```
+###  <span id = "5">**5. Android使用Binder作为主要进程间通讯机制：**</span>
+
+1、安全性：Binder机制从协议本身就支持对通信双方做身份校检，安全性高。传统的进程通信方式对于通信双方的身份并没有做出严格的验证，只有在上层协议上进行架设；比如Socket通信ip地址是客户端手动填入的，都可以进行伪造
+
+2、性能：socket作为一款通用接口，其传输效率低，开销大，主要用在跨网络的进程间通信和本机上进程间的低速通信，Binder其实通过Binder驱动在内核区域进行了数据的传输，性能高
