@@ -1,0 +1,135 @@
+# Android 的View滑动
+
+Android中经常看到一些炫酷的效果，这些效果很多伴随着View的滑动。我们想要做出这样的效果，掌握View的滑动方式必不可少。由于Android手机屏幕小，为了给用户呈现更多的内容，就需要使用滑动来隐藏和显示一些内容，从以上这些可以知道，滑动在Android开发中是很重要的，不管一些滑动效果多么的绚丽，归根结底，它们都是由不同的滑动加一些特效所组成的。所以掌握滑动的方法是实现绚丽的自定义的控件基础。
+
+## 目录
+
+***1、使用scrollTo/scrollBy***
+
+***2、使用动画***
+
+***3、改变布局参数***
+
+***4、使用layout***
+
+### 1、使用scrollTo/scrollBy
+
+为了实现 View 的滑动，View 提供了专门的方法来实现这个功能，那就是 scrollTo 和 scrollBy，两个方法的实现，如下所示：
+
+    public void scrollTo(int x,int y) {
+        if (mScrollX != x || mScrollY != y) {
+            int oldX = mScrollX;
+            int oldY = mScrollY;
+            mScrollX = x;
+            mScrollY = y;
+            invalidateParentCaches();
+            onScrollChaged(mScrollX,mScrollY,oldX,oldY);
+            if (!awakenScrollBars()) {
+                postInvalidateOnAnimation();
+            }
+        }
+    }
+
+    public void scrollBy(int x,int y) {
+        scrollTo(mScrollX + x,mScrollY + y);
+    }
+
+从上面可以看出，scrollBy 方法只是调用了 scroll 方法,它实现了基于当前位置的相对滑动，而 scrollTo 则实现了基于所传递参数的绝对滑动。利用 scrollTo 和 scrollBy 来实现 View 的滑动;但是滑动的过程中，View 中的两个属性 mScrollX 和 mScrollY 的改变规则，这两个属性可以通过 getScrollX 和 getScrollY 方法分别得到。在滑动的过程中，mScollX 的总值是等于 View 的左边缘和 View 内容左边缘在水平方向的距离，而 mScroll 的值总是等于 View 上边缘和 View 内容上边缘在垂直方向上的距离。
+
+### 2、使用动画
+
+使用动画来移动 View ，主要是操作 View 的 translationX 和 translationY 属性，即可以采用传统的 View 动画，也可以采用属性动画，如果采用属性动画的话，为了可以兼容3.0以下的版本，需要采用开源动画库 nineoldandroids。使用View动画来移动，先在 res 目录新建 anim文件夹并创建 translate.xml：
+
+    <?xml version="1.0" encoding="utf-8"?>
+
+     <set xmlns:android="http://schemas.android.com/apk/res/android">
+
+      <translate android:fromXDelta="0" android:toXDelta="300" android:duration="1000"/>
+
+     </set>
+
+在Java代码中引用：
+
+    mCustomView.setAnimation(AnimationUtils.loadAnimation(this, R.anim.translate));
+
+使用属性动画移动那就更简单了，我们让 CustomView 在1000毫秒内沿着X轴像右平移300像素：
+
+    ObjectAnimator.ofFloat(mCustomView,"translationX",0,300).setDuration(1000).start();
+
+### 3、改变布局参数
+
+改变布局参数其实就是改变 LayoutParams，我们如果要把一个 Button 向右平移100px，我们只需要将这个 Button 的LayoutParams 里的 marginLeft 参数的值增加100px即可，还有一种情况，为了达到移动 Button 的目的，我们可以在 Button 的左边放置一个空的 View，这个空的 View 的默认宽度为0，当我们需要向右平移 Button 时，只需要重新设置空 View 的宽度即可，当空的 View 的宽度增大时,Button 就自动被挤向右边了，即实现了向右平移的效果。LayoutParams 主要保存了一个 View 的布局参数，因此可以通过 LayoutParams 来改变View的布局的参数从而达到了改变View 的位置的效果：
+
+    LinearLayout.LayoutParams layoutParams= (LinearLayout.LayoutParams) getLayoutParams();
+
+    layoutParams.leftMargin = getLeft() + offsetX;
+
+    layoutParams.topMargin = getTop() + offsetY;
+
+    setLayoutParams(layoutParams);
+
+### 4、使用layout
+
+view 进行绘制的时候会调用 onLayout() 方法来设置显示的位置，因此同样也可以通过修改 View 的 left、top、right、bottom 这四种属性来控制 View 的坐标。首先要自定义一个 View，在 onTouchEvent() 方法中获取触摸点的坐标：
+
+    public boolean onTouchEvent(MotionEvent event) {
+    //获取到手指处的横坐标和纵坐标
+    int X = 0, newX = 0;
+
+    int Y = 0, newY = 0;
+
+    switch (event.getAction()) {
+
+      case MotionEvent.ACTION_DOWN:
+
+        Log.d("hahahhaha", "屏幕位置被按下");
+
+        X = (int) event.getX();
+
+        Y = (int) event.getY();
+    
+       break;
+    }
+
+    }
+
+接下来在ACTION_MOVE事件中计算偏移量，再调用layout()方法重新放置这个自定义View的位置就好了：
+
+    public boolean onTouchEvent(MotionEvent event) {
+
+    //获取到手指处的横坐标和纵坐标
+    int X = 0, newX = 0;
+
+    int Y = 0, newY = 0;
+
+    switch (event.getAction()) {
+
+      case MotionEvent.ACTION_DOWN:
+
+        Log.d("hahahhaha", "屏幕位置被按下");
+
+        X = (int) event.getX();
+
+        Y = (int) event.getY();
+ 
+        break;
+     case MotionEvent.ACTION_MOVE:
+
+       Log.d("hahahhaha", "屏幕位置在移動");
+
+       newX = (int) event.getX();
+
+       newY = (int) event.getY();
+     
+       int offsetX = newX - X;
+
+       int offsetY = newY - Y;
+
+       Log.d("hahaha", "offsetX=" + offsetX + ",offsetY=" + offsetY);
+
+       //1.调用layout方法来重新放置它的位置
+       layout(getLeft()+offsetX, getTop()+offsetY,
+          getRight()+offsetX , getBottom()+offsetY);
+       }
+
+       }
