@@ -1,3 +1,5 @@
+## AndroidManifest
+
 > 每个应用都必须包含一个AndroidManifest.xml文件.此文件向系统提供应用运行的必须信息
 
 额外功能:
