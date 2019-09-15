@@ -1,0 +1,100 @@
+# 初识View2-View滑动 #
+
+## 目录 ##
+
+1. 通过scrollTo/scrollBy方法实现滑动
+2. 通过动画实现滑动
+3. 改变View布局参数
+
+##1. scrollTo/scrollBy  ##
+&ensp;&ensp;&ensp;&ensp;scrollTo/ScrollBy方法是View本身提供用来实现滑动效果，使用这两个方法都可以改变View内容的位置，但是不能改变View在布局中的位置。
+
+    /**
+     * Set the scrolled position of your view. This will cause a call to
+     * {@link #onScrollChanged(int, int, int, int)} and the view will be
+     * invalidated.
+     * @param x the x position to scroll to
+     * @param y the y position to scroll to
+     */
+    public void scrollTo(int x, int y) {
+        if (mScrollX != x || mScrollY != y) {
+            int oldX = mScrollX;
+            int oldY = mScrollY;
+            mScrollX = x;
+            mScrollY = y;
+			//清除父视图的缓存，重新绘制视图
+            invalidateParentCaches();
+            onScrollChanged(mScrollX, mScrollY, oldX, oldY);
+            if (!awakenScrollBars()) {
+                postInvalidateOnAnimation();
+            }
+        }
+    }
+
+	/**
+     * Move the scrolled position of your view. This will cause a call to
+     * {@link #onScrollChanged(int, int, int, int)} and the view will be
+     * invalidated.
+     * @param x the amount of pixels to scroll by horizontally
+     * @param y the amount of pixels to scroll by vertically
+     */
+    public void scrollBy(int x, int y) {
+        scrollTo(mScrollX + x, mScrollY + y);
+    }
+
+&ensp;&ensp;&ensp;&ensp;从源码中看出scrollTo方法可以传入两个参数x、y，这两个参数就用来改变View内容位置，从而实现View的滑动效果；scrollBy方法同样也可以传入两个参数，并且从源码中可以看得出来，scrollBy实际上是调用了scrollTo方法来实现View滑动效果。这个两种方法的区别在于scrollTo实现了基于当前位置的绝对滑动，而scrollBy是基于当前位置的相对滑动。  
+&ensp;&ensp;&ensp;&ensp;另外从注释中scrollTo/scrollBy可以看出这两者的区别在于一个为Set、另一个为Move,从字面上理解set就是设置View内容的位置，只要传入的参数不变，那么View内容的位置就不会发生改变，而Move则是移动View内容的位置，每次调用scrollBy方法，View内容的位置就会相对当前位置进行移动。  
+
+## 2. 通过动画实现滑动 ##
+&ensp;&ensp;&ensp;&ensp;Android系统提供了两个动画框架：属性动画框架和View动画框架。  
+
+&ensp;&ensp;&ensp;&ensp;AndroidView动画框架是旧的框架，只能用于View。View动画框架中一共提供了AlphaAnimation（透明度动画）、RotateAnimation（旋转动画）、ScaleAnimation（缩放动画）、TranslateAnimation（平移动画）四种类型的补间动画；并且View动画框架还提供了动画集合类（AnimationSet），通过动画集合类（AnimationSet）可以将多个补间动画以组合的形式显示出来。  
+
+&ensp;&ensp;&ensp;&ensp;与属性动画相比View动画存在一个缺陷，**View动画改变的只是View的显示，而没有改变View的响应区域**，并且View动画只能对View做四种类型的补间动画。因此Google在Android3.0（API级别11）及其后续版本中添加了属性动画框架，从名称中就可以知道只要某个类具有属性（即该类含有某个字段的set和get方法），那么属性动画框架就可以对该类的对象进行动画操作（其实就是通过反射技术来获取和执行属性的get，set方法），同样属性动画框架还提供了动画集合类（AnimatorSet），通过动画集合类（AnimatorSet）可以将多个属性动画以组合的形式显示出来。
+
+&ensp;&ensp;&ensp;&ensp;使用动画来实现滑动效果，实际上是操作View的translationX和translationY属性，通过操作这两个属性可让View在水平/垂直方向平移，从而实现滑动,View动画例子如下。  
+
+	<?xml version="1.0" encoding="utf-8"?>
+	<set xmlns:android="http://schemas.android.com/apk/res/android"
+	    android:fillAfter="true">
+	    <translate
+	        android:duration="1000"
+	        android:fromXDelta="0"
+	        android:fromYDelta="0"
+	        android:toXDelta="100"
+	        android:toYDelta="100"/>
+	</set>
+	--------------------------------------------------
+	imageView.startAnimation(AnimationUtils.loadAnimation(this,R.anim.slide_right));
+
+&ensp;&ensp;&ensp;&ensp;在anim文件夹中新建一个动画文件，在View对象中调用startAnimation执行动画对象。fillAfter属性设置动画执行完成后View状态是否停留在动画的最后一刹那。  
+&ensp;&ensp;&ensp;&ensp;如果采用属性动画效果实现View的平移效果，那么将会变得非常简单：
+
+		`AnimatorSet animatorSet=new AnimatorSet();
+	//      向右下角方向移动100dp
+	        animatorSet.playTogether(
+	                ObjectAnimator.ofFloat(imageView,"translationX",0,100).setDuration(1000),
+	                ObjectAnimator.ofFloat(imageView,"translationY",0,100).setDuration(1000));
+	        animatorSet.start();`
+		``
+	
+## 3. 改变View布局参数 ##
+&ensp;&ensp;&ensp;&ensp;通过改变View的布局参数也可以实现滑动的效果，即改变LayoutParams的width、height参数。  
+
+		imageView.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) imageView.getLayoutParams();
+                params.leftMargin+=50;
+                params.topMargin+=50;
+                imageView.setLayoutParams(params);
+            }
+        });  
+&ensp;&ensp;&ensp;&ensp;上面例子实现的效果是每次点击imageView都向右下方移动50dp,其中leftMargin、topMargin参数是指View与父布局之间的间隔。相当于在XML文件中设置android:layout_marginLeft="50dp"android:layout_marginTop="50dp"属性。  
+
+## 总结 ##
+
+
+- scrllTo/scrollBy操作简单，适合对View内容的滑动；
+- 动画：操作简单,主要适用于没有交互的View和实现复杂的动画效果；
+- 改变布局参数：操作稍微复杂，适用于有交互的View.
