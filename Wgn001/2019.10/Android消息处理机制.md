@@ -1,0 +1,189 @@
+# Android的消息机制 #
+
+&ensp;&ensp;&ensp;&ensp;Android 的消息机制主要是指Handler 的运行机制，Handler的运行需要底层的MessageQueue和Looper的支撑。MessageQueue 它的内部存储了一组消息，以队列的形式对外提供插入和删除的工作。然而MessageQueue采用单链表的数据结构来存储消息列表，它真正的内部存储结构并不是真正的队列。MessageQueue只是一个消息存储单元，不能去处理消息，所以Looper出现了，Looper翻译为中文是循环的意思。Looper会以无限循环的形式去查找是否有新消息，如果有的话就去处理消息，否则就一直等待着。Looper中还有一个特殊的概念，那就是ThreadLocal,ThreadLocal并不是线程，它的作用是可以在每个线程中存储数据。  
+
+ Handler、MessageQueue、 Looper、Message的关系如下图：
+![](https://i.imgur.com/LnwFBrK.jpg)
+
+## MessageQueue 的工作原理 ##
+&ensp;&ensp;&ensp;&ensp;消息队列在Android中指MessageQueue，MessageQueue主要操作包含两个操作：插入和读取。读取操作本身伴随着删除操作，插入和读取对应的方法分别为enqueueMessage和next。enqueueMessage是从消息队列中插入一条消息，next是从消息队列中取出一条消息并且从消息队列中移除。  
+		boolean enqueueMessage(Message msg, long when) {
+        if (msg.target == null) {
+            throw new IllegalArgumentException("Message must have a target.");
+        }
+        if (msg.isInUse()) {
+            throw new IllegalStateException(msg + " This message is already in use.");
+        }
+
+        synchronized (this) {
+            if (mQuitting) {
+                IllegalStateException e = new IllegalStateException(
+                        msg.target + " sending message to a Handler on a dead thread");
+                Log.w(TAG, e.getMessage(), e);
+                msg.recycle();
+                return false;
+            }
+
+            msg.markInUse();
+            msg.when = when;
+            Message p = mMessages;
+            boolean needWake;
+            if (p == null || when == 0 || when < p.when) {
+                // New head, wake up the event queue if blocked.
+                msg.next = p;
+                mMessages = msg;
+                needWake = mBlocked;
+            } else {
+                // Inserted within the middle of the queue.  Usually we don't have to wake
+                // up the event queue unless there is a barrier at the head of the queue
+                // and the message is the earliest asynchronous message in the queue.
+                needWake = mBlocked && p.target == null && msg.isAsynchronous();
+                Message prev;
+                for (;;) {
+                    prev = p;
+                    p = p.next;
+                    if (p == null || when < p.when) {
+                        break;
+                    }
+                    if (needWake && p.isAsynchronous()) {
+                        needWake = false;
+                    }
+                }
+                msg.next = p; // invariant: p == prev.next
+                prev.next = msg;
+            }
+
+            // We can assume mPtr != 0 because mQuitting is false.
+            if (needWake) {
+                nativeWake(mPtr);
+            }
+        }
+        return true;
+    }  
+&ensp;&ensp;&ensp;&ensp;从源码可以看出，消息在插入队列时，首先会判断新消息如果是第一个消息或者新消息没有延时或者延时时间小于对队列中第一个消息的延时时间，那么就会立即处理该消息。当消息延时大于队列头消息时间时，将会遍历消息队列，把新消息插入对应的响应位置。  
+
+		Message next() {
+		......
+
+        int pendingIdleHandlerCount = -1; // -1 only during first iteration
+        int nextPollTimeoutMillis = 0;
+        for (;;) {
+            if (nextPollTimeoutMillis != 0) {
+                Binder.flushPendingCommands();
+            }
+
+            nativePollOnce(ptr, nextPollTimeoutMillis);
+
+            synchronized (this) {
+                // Try to retrieve the next message.  Return if found.
+                final long now = SystemClock.uptimeMillis();
+                Message prevMsg = null;
+                Message msg = mMessages;
+                if (msg != null && msg.target == null) {
+                    // Stalled by a barrier.  Find the next asynchronous message in the queue.
+                    do {
+                        prevMsg = msg;
+                        msg = msg.next;
+                    } while (msg != null && !msg.isAsynchronous());
+                }
+                if (msg != null) {
+                    if (now < msg.when) {
+                        // Next message is not ready.  Set a timeout to wake up when it is ready.
+                        nextPollTimeoutMillis = (int) Math.min(msg.when - now, Integer.MAX_VALUE);
+                    } else {
+                        // Got a message.
+                        mBlocked = false;
+                        if (prevMsg != null) {
+                            prevMsg.next = msg.next;
+                        } else {
+                            mMessages = msg.next;
+                        }
+                        msg.next = null;
+                        if (DEBUG) Log.v(TAG, "Returning message: " + msg);
+                        msg.markInUse();
+                        return msg;
+                    }
+                } else {
+                    // No more messages.
+                    nextPollTimeoutMillis = -1;
+                }
+
+               ......
+    }  
+
+&ensp;&ensp;&ensp;&ensp;next方法内部是一个无限循环，当消息队列中消息为null时，next方法则一直阻塞。  
+nextPollTimeoutMillis=0 不堵塞  
+nextPollTimeoutMillis<0 一直堵塞  
+nextPollTimeoutMillis>0 堵塞对应时长，可被新消息唤醒
+
+## Looper 的工作原理 ##
+&ensp;&ensp;&ensp;&ensp;Looper在Android的消息机制中的作用是不停地从消息队列中查看是否有新的消息，如果有则立即处理，如果没有则阻塞在那里。在Looper的构造方法中创建了一个MessageQueue，然后将当前线程保存起来。  
+
+		private Looper(boolean quitAllowed) {
+        mQueue = new MessageQueue(quitAllowed);
+        mThread = Thread.currentThread();
+    }	  
+
+&ensp;&ensp;&ensp;&ensp;虽然Looper提供了构造方法，但是我们在创建的Looper对象的时候一般不使用构造方法，而是调用Looper的prepare方法，prepare()使用ThreadLocal 保存当前Looper对象，ThreadLocal 类可以对数据进行线程隔离，保证了在当前线程只能获取当前线程的Looper对象，同时prepare()保证当前线程有且只有一个Looper对象，间接保证了一个线程只有一个MessageQueue对象。创建完Looper对象后，在调用Looper的looper方法开启无限循环，然后通过MessageQueue的next方法获取消息对象，调用msg.target.dispatchMessage()方法将对象交给handler处理,最后回收。looper源码如下：  
+
+		public static void loop() {
+        ......
+        for (;;) {
+            Message msg = queue.next(); // might block
+            if (msg == null) {
+                // No message indicates that the message queue is quitting.
+                return;
+            }
+			........
+            try {
+                msg.target.dispatchMessage(msg);
+                dispatchEnd = needEndTime ? SystemClock.uptimeMillis() : 0;
+            } finally {
+                if (traceTag != 0) {
+                    Trace.traceEnd(traceTag);
+                }
+            }
+           ......
+            msg.recycleUnchecked();
+        }
+    }  
+
+
+## Handler 的工作原理 ##
+&ensp;&ensp;&ensp;&ensp;Handler的主要作用是将一个任务切换到指定线程去执行。Android为什么要提供这种功能呢，这是因为Android访问UI只能在主线程中进行，如果在子线程中访问UI，那么程序就会抛出异常。 
+&ensp;&ensp;&ensp;&ensp;Handler是进程内部、线程间的一种通信机制，Handler的工作主要包含消息的发送和接收过程。消息的发送可以通过post的一系列的方法以及send的一系列方法来实现，post的系列方法最终是通过该send的一系列方法来实现的，重点方法代码如下：  
+
+
+	public boolean sendMessageAtTime(Message msg, long uptimeMillis) {
+        MessageQueue queue = mQueue;
+        if (queue == null) {
+            RuntimeException e = new RuntimeException(
+                    this + " sendMessageAtTime() called with no mQueue");
+            Log.w("Looper", e.getMessage(), e);
+            return false;
+        }
+        return enqueueMessage(queue, msg, uptimeMillis);
+    }
+	
+	private boolean enqueueMessage(MessageQueue queue, Message msg, long uptimeMillis) {
+        msg.target = this;
+        if (mAsynchronous) {
+            msg.setAsynchronous(true);
+        }
+        return queue.enqueueMessage(msg, uptimeMillis);
+    }    
+
+&ensp;&ensp;&ensp;&ensp;上面代码中可以看到Handler发送消息过程直接将新消息对象插入MessageQueue，然后MessageQueue的next方法会返回这条消息给Looper，Looper收到消息后就开始处理了，最终这条消息有Looper交由Handler处理。Handler在处理消息会调用dispatchMessage方法来处理消息，或者我们可以在创建Handler时实现Callback接口也可以处理消息。  
+  
+		  public void dispatchMessage(Message msg) {
+		        if (msg.callback != null) {
+		            handleCallback(msg);
+		        } else {
+		            if (mCallback != null) {
+		                if (mCallback.handleMessage(msg)) {
+		                    return;
+		                }
+		            }
+		            handleMessage(msg);
+		        }
+		    }
