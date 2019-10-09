@@ -1,0 +1,296 @@
+### Android 数据存储 | SQLite 中的 SQL 语句
+
+SQLite 是一款轻量级的关系型数据库，它的运算速度非常快，占用资源非常少。SQLite 基本符合 SQL-92 标准，尽管它支持大多数的复杂查询，但它的 ALTER TABLE功能有所限制，只能添加和重命名列，不能修改或删除列。SQLite不进行类型检查，你可以把字符串插入到整数列中
+
+#### 1. SQLite 数据类型
+SQLite中的数据类型只有五种：
+
+| 数据类型   |       说明                    |
+| :-------- |    :--------                 |
+| Null      | 数据值为空                     |
+| INTEGER   | 整形      					   |
+| REAL      | 浮点型                        |
+| TEXT      | 字符类型，使用数据库编码         |
+| BLOB      | 只是一个数据块，完全按照输入存放   |
+
+#### 2. SQLite常用约束条件
+| 约束条件  	       |       作用         |
+| :--------        |    :--------      |
+| NOT NULL         | 非空               |
+| UNIQUE           | 唯一      		   |
+| PRIMARY KEY      | 主键               |
+| FOREIGN KEY      | 外键               |
+| CHECK            | 条件检查            |
+| DEFAULT          | 字段默认值           |
+| AUTOINCREMENT    | 自增长              |
+
+知道数据类型和约束条件之后我们就可以来创建一个具体的表了，创建一个班级表，含有三个字段，分别是自增的主键id，专业和年份：
+```
+CREATE TABLE 'classes' (
+	'id' INTEGER PRIMARY KEY AUTOINCREMENT,
+	'major' TEXT NOT NULL,
+	'year' INTEGER NOT NULL
+)
+```
+再创建一个 student 表，该表中含有学生 id 号，姓名，电话以及班级 id ，SQL 语句如下：
+```
+CREATE TABLE students(
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	name VARCHAR(20) check(length(name) > 3),
+	tel_no VARCHAR(11) NOT NULL,
+	cks_id INTEGER NOT NULL,
+	unique(name, tel_no),
+	FOREIGN KEY(cls_id) REFERENCES classes(id)
+）
+```
+其中将姓名和电话字段组合起来使之成为唯一，cls_id 设置了一个外键，关联的是 clesses 表中的 id
+
+#### 3. 外键约束
+SQLite 支持关系理论中的关系完整性概念，关系完整性概念也称为外键。其中外键引用的表称为父表，如 classes 表，含有外键的表称为子表
+如果在 Android 程序中需要使用外键约束，可以在 SQLOpenHelpe r类中的 onOpen 函数中启用该功能，代码如下：
+```
+@Override
+public void onOpen(SQLiteDataBase db) {
+	super.onOpen(db);
+	if(!db.isReadOnly()) {
+		db.execSQL("PRAGMA foreign_keys=ON;");
+	}
+}
+```
+
+#### 4. 插入数据
+SQL 插入数据的完整格式为：
+
+> insert into 表名 （字段列表） values （与字段列表对应的字段值）;
+
+例如，在 classes 表中插入一条数据：
+```
+insert into classes values(1, "android", 2019);
+```
+如果 values 括号中的字段值并没有包含所有的字段，那么需要在表名后添加字段列表：
+```
+insert into classes (major, year) values ("android", 2019);
+```
+insert 语句也支持批量插入数据，形式为：
+
+> insert into 表名数据集
+
+例如，新建一个 stu 表，并且将 students 表中的数据导入 stu 表中，创建 stu 表的语句：
+```
+CREATE TABLE students(
+	id INTEGER PRIMARY KEY,
+	name VARCHAR(20),
+	tel_no VARCHAR(11) NOT NULL,
+	cks_id INTEGER NOT NULL,
+）
+```
+创建号 stu 表后，将 students 中的数据插入到stu中：
+```
+insert into stu select * from students;
+```
+在这里 stu 和 students 的字段是一样的，如果字段不一样的话也是可以操作的，假设我们不将 students 的 id 字段导入到 stu 中，由 stu 自动生成：
+```
+insert into stu (name, tel_no, cks_id) select name, tel_no, cls_id from students;
+```
+实际上还有一种更简单的方法实现 students 导入到 stu 中，我们可以创建 stu 表时直接将 students 表的数据作为数据：
+```
+create table stu as select * from students;
+```
+通过这种形式创建的表不会导入原始表的字段约束，只是简单声明了数据类型，因此，这种方法不是很常用
+
+#### 5. select语句
+##### 5.1 字段与表的别名
+多表查询时由于表名较长会使得 select 语句变得复杂，此时可以使用别名来替代表名简化 SQL 语句，例如如下的 sql 语句：
+```
+select classes.major, students.name from classes, students where classes.id=2 and classes.year > 2008;
+```
+将上述 SQL 语句简化一下：
+```
+select cls.major as cmj, students.name from classes as cls, students where cls.id=2 and cls.year > 2008;
+```
+##### 5.2 where 条件过滤
+在通过select获取数据时，我们往往会通过where语句设定查询条件，例如，在老师要找2019届软件工程专业名字为tiiime的学生，SQL语句如下：
+```
+select * from classes, students where students.name="tiiime" and classes.major="software" and classes.year=2019;
+```
+常用的逻辑操作符有 and、or、not。where 语句还有一个较为重要的关系操作符 like ，它的作用是模糊匹配，例如要找到 student 表中名字以t开头的学生，那么对应的SQL为：
+```
+select * from students where name like "t%";
+```
+##### 5.3 Group by 分组
+聚合中有一个重要的功能就是分组。分组是将得到的结果集按照一定的规则划分为多个组，例如：
+```
+select count(*), cls_id from students group by cls_id;
+```
+上面的SQL语句则是将 students 的数据按照cls_id进行分组。
+分组中有一个类似于 select 中的 where 字句的条件字句，它能给分组设置一些条件，如果不符合条件就会被过滤掉，例如，将上述分组查询的SQL条件设置为 cls_id 大于2，SQL语句为：
+```
+select count(*), cls_id from students group by cls_id having cls_id>2;
+```
+##### 5.4 排序
+select结果集的排序使用的是 order by 字句，排序有升序和降序两种，分别对应 asc 与 desc，默认为升序。例如，检索 students 中的数据，并且按照班级 id 降序排序，对应的SQL语句为：
+```
+select * from students order by cls_id desc;
+```
+如果想按照多个字段排序：
+```
+select * from students order by cls_id desc, name asc;
+```
+##### 5.5 数量限定
+当检索的数据量比较大，只需要返回特定数量的记录时，可以使用 limit 语句，它的形式为：
+
+> limit 返回的数量 offset 偏移量
+
+例如，检索 students 表时，需要从 id 为3的位置开始检索，返回1个数据时，SQL 语句如下：
+```
+select * from students limit 1 offset 2;
+```
+与之等效的 SQL 语句为：
+```
+select * from students limit 2,1;
+```
+limit常用于分页检索数据
+
+##### 5.6 distinct 去重
+distinct 用于取出 select 语句中重复的行，它紧跟在 select 关键字之后，例如：
+```
+select distinct cls_id from students;
+```
+##### 5.7 聚合函数
+
+| 函数名      |     作用 |
+| :--------  | :--------|
+| count()    |   计算数据集的数量 |
+| avg()      |   计算数据集中某个字段的平均值 |
+| min()      |   计算数据集中的最小值 |
+| max()      |   计算数据集中的最大值 |
+| length()   |   计算某个字段的长度 |
+| upper()    |   将字符串类型的字段值转换为大写 |
+| lower()    |   将字符串类型的字段值转换为小写 |
+| abs()      |   计算数值的绝对值 |
+
+例如查询 students 表中学生的数量：
+```
+select count(*) from students;
+```
+再如，了解 students 中用户名的平均长度：
+```
+select avg(length(name)) from students;
+```
+##### 5.8 多表连接
+下面以 students 的 cls_id 字段与 classes 的 id 相等为条件进行查询：
+```
+select * from students， classes where students.cls_id = classes.id;
+```
+##### 5.9 内连接
+例如，可以将上述的 SQL 改写为：
+```
+select * from students inner join classes on students.cls_id = classes.id;
+```
+返回的结果和上面是一样的
+##### 5.10 左外连接
+左外连接与内连接的语法相似，知识将 inner join 换成 left outer join。它与 inner join 的区别是如果条件不匹配，那么它的结果集中会返回左表中的数据，右表中的数据将由字段类型的空值填充
+```
+select * from students left outer join classes on students.cls_id = classes.id;
+```
+
+#### 6. update 语句
+update语句用于更新表中的数据，格式为：
+
+> update table set update_list where predicate;
+
+例如，需要将 name 为 jake 的学生电话好吗改为4321，cls_id 修改为3，对应的SQL为：
+```
+update students set tel_no=4321, cls_id=3 where name="jake";
+```
+#### 7. delete 语句
+delete 指出了该语句的功能，where 则限制要删除的数据必须满足的条件，如果没有设定 where 条件，那么表中的数据都会被删除，通用格式如下：
+
+> delete from students where predicate;
+
+#### 8. 修改表
+修改表的 SQL 语句为 alter 命令，SQlite 中的 alter 命令并没有实现标准的SQL中的所有功能，它只有修改表名和添加字段两个功能，删除字段等功能只能通过重新创建表来实现。alter 的语法为：
+
+> alter table tableName { rename to newName | add column 新的字段 }
+
+rename to是将表名重命名，add column是添加字段。例如，要将students表重命名为stu_table，那么对应的SQL语句为：
+```
+alter table students rename to stu_table;
+``` 
+如果要在students表中添加一个年龄age的字段，那么对应的SQL语句为：
+```
+alter table students add column age integer default 0;
+```
+重命名和添加字段都很简单。那么添加 age 字段之后，发现这个字段有些多余，想要删除这个字段，这个过程就比较麻烦了，需要创建一个新表，然后将 students 表中的数据导入到新表，最后删除 students 表，然后再重命名新表名为 students 表，例如：
+```
+CREATE TABLE 'stu_temp'(
+...省略
+)
+insert into stu_temp select id,name,tel_no,cls_id from students;
+drop table students;
+alter table stu_temp rename to students;
+```
+#### 9. 创建索引
+待补充
+#### 10. 创建视图
+视图是动态生成的虚拟表，他不会被存储到数据库文件中。它常用将某些查询结果简化为一个视图，以便下次运用时简化SQL语句，创建视图的语法：
+
+> create view view_name as select-stmt;
+
+select-stmt表示视图代表的 select 语句，例如需要经常使用如下的SQL语句：
+```
+select * from students,classes where students.cls_id=classes.id and cls_id>2;
+```
+那么可以为这个查询创建一个视图，对应SQL语句如下：
+```
+create view student_view as select * from students,classes where students.cls_id=classes.id and cls_id>2;
+```
+然后通过这个视图来查询数据：
+```
+select * from student_view;
+```
+#### 11. 创建触发器
+触发器的作用是当特定的表发生特定的操作时进行预定义的操作。创建触发器的通用命令为：
+
+> create [temp | temporary] trigger name [before | after] [insert | select | delete | update of columns] on table
+> begin
+> action;
+> end;
+
+名称、表名、行为是触发器的三大要素。下面举个例子，当删除学生时向 delete_log 表中添加一条记录。首先创建 delete_log 表，SQL 如下：
+```
+create table delete_log(
+	stu_id int not null,
+	stu_name text not null,
+	time text
+)
+```
+然后创建触发器：
+```
+create trigger delete_trig after delet on students
+begin
+insert into delete_log(stu_id,stu_name,time) values (old.id,old.name, datetime('now'));
+end;
+```
+再看一个示例，当向 students 表中插入一条数据时，向new_log表中插入一条记录，首先我们将 delete_log 重命名为 new_log：
+```
+alter table delete_log rename to new_log;
+```
+然后创建插入时的触发器，如下：
+```
+create trigger new_trig after insert on students
+begin
+insert into new_log(stu_id, stu_name, time) values (new.id,new.name,detetime('now'));
+end;
+```
+####  12. drop命令
+drop 命令用于删除物理存储介质。例如删除表，视图，索引，触发器等。格式为：
+
+> drop [table | view | index | trigger] name;
+
+####  13. 数据库事务
+事务是数据库操作的执行单元，它定义了一条或多条SQL语句，这些语句要么被全部执行，要么不全部执行，格式如下：
+
+> begin;
+> SQL语句
+> [commit | rollback];
