@@ -1,0 +1,67 @@
+### Android 自定义 View 之 硬件加速
+
+#### 1. 前言
+
+**GPU** 与 CPU 不同，GPU 是专门为处理图形任务而产生的芯片。专门处理多媒体的计算、存储任务
+在 Android 中，API 14 之后，硬件加速功能是默认开启的
+
+#### 2. 软件绘制与硬件加速地区别
+
+在 CPU 绘制和 GPU 绘制时，在流程上是有区别的
+
+在基于软件的绘制模型下，CPU 主导绘图，视图按照两个步骤绘制：
+
+- 让 View 层次结构失效
+- 绘制 View 层次结构
+
+在基于硬件加速的绘制模式下，GPU 主导绘图，视图按照三个步骤绘制：
+
+- 让 View 层次结构失效
+- 记录、更新显示列表
+- 绘制显示列表
+
+GPU 加速时，流程中多了一项“记录、更新显示列表”，表示在第一步 View 层次结构失效后，并不是直接开始逐层绘制，而是首先把这些 View 的绘制函数作为绘制指令记录在一个显示列表中，然后再读取显示列表中的绘制指令，调用 OpenGl 的相关函数完成实际绘制。也就是说，在 GPU 加速时，实际上是使用 OpenGl 的相关函数来完成绘制的
+
+所以，使用 GPU 加速的优点是：硬件加速提高了 Android 系统显示和刷新的速度
+
+它的缺点也显而易见：
+
+- 兼容性问题
+- 内存消耗问题
+- 电量消耗问题
+
+#### 3. 禁用 GPU 硬件加速的方法
+
+针对不同的类型，Android 提供了不同的禁用方法，分 Application、Activity、Window、View 4个层级
+
+- 在 AndroidManifest.xml 文件中为 application 标签添加如下属性，即可谓整个应用程序开启/关闭硬件加速
+
+```
+android:hardwareAccelerated="true"
+```
+
+- 在 Activity 标签下使用 hardwareAccelerated 属性开启或关闭硬件加速
+- 在 Window 层级上使用如下代码开启关闭硬件加速（在 Window 层级上不支持关闭硬件加速）
+
+```
+getWindow().setFlags(
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED, 
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
+```
+
+- 在 View 层级上使用如下代码关闭硬件加速（View层级上不支持开启硬件加速）
+
+```
+setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+```
+
+或者使用 android:layerType="software"来关闭硬件加速
+
+```
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:layerType="software">
+```
+
