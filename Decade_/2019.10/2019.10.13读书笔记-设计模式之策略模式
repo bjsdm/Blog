@@ -1,0 +1,169 @@
+### 设计模式之策略模式
+
+#### 一. 定义
+
+在很多情况下，实现某个目标的途径不止一条，例如外出旅游时游客可以选择多种不同的出行方式，如骑自行车，坐汽车，坐火车，或者坐飞机。
+
+在软件开发中，实现某一功能有多种算法，比如实现一个排序功能，就有快速排序、归并排序和堆排序等等，一种常用的方法是将所有的算法都集中在一个类中，但是此时如果需要增加一种新的算法，需要修改算法类的源代码，这样就破坏了开闭原则，而且维护也比较困难
+
+这种情况下就可以使用到策略模式，在策略模式中可以定义一些独立的类来封装不同的算法，每一个类封装一种具体的算法，为了保证这些策略在使用时具有一致性，一般会提供一个抽象的策略类来做算法的声明，而每种算法对应于一个具体的策略类
+
+#### 二. 结构
+
+![类图](https://img-blog.csdnimg.cn/20190717121023281.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L0RZUV9MaW4=,size_16,color_FFFFFF,t_70)
+
+- Context（环境类）：使用算法的角色，它维持一个对抽象算法类的引用实例
+- Sort（抽象算法类）：抽象算法类为所支持的算法声明了抽象方法，是所有算法类的父类。环境类通过抽象算法类中声明的方法在运行时调用具体策略类中实现的算法
+- QuickSort（具体算法类）：继承抽象算法类并重写抽象方法，实现具体算法
+
+#### 三. 代码实现
+
+首先创建一个抽象算法类，充当抽象策略类
+
+```
+public abstract class Sort {
+	public abstract void sort(int[] a, int left, int right);
+}
+```
+
+MergeSort：归并排序算法类，充当具体策略类
+
+```
+public class MergeSort extends Sort{
+
+	@Override
+    public void sort(int [] a, int left, int right) {
+    	int center;
+    	int[] tmpArray = new int[a.length];
+        if (left == right) {
+            return;
+        }
+        else {
+        	center = (left + right) / 2;
+        	sort(a, left, center);
+        	sort(a, center + 1, right);
+            merge(a, tmpArray, left, center, right);
+            for (int i = left; i <= right; i++) {
+                a[i] = tmpArray[i];
+            }
+		}
+        
+    }
+
+    public void merge(int [] a, int [] tmpArray, int leftStart, int leftEnd, int rightEnd){
+        int rightPos = leftEnd + 1;
+        int tmpPos = leftStart;
+        int leftPos = leftStart;
+        while (leftPos <= leftEnd && rightPos <= rightEnd) {
+            if (a[leftPos] <= a[rightPos]) {
+                tmpArray[tmpPos++] = a[leftPos++];
+            } else {
+                tmpArray[tmpPos++] = a[rightPos++];
+            }
+        }
+        while (leftPos <= leftEnd) {
+            tmpArray[tmpPos++] = a[leftPos++];
+        }
+        while (rightPos <= rightEnd) {
+            tmpArray[tmpPos++] = a[rightPos++];
+        }
+    }
+}
+```
+
+QuickSort：快速排序算法类，充当具体策略类
+
+```
+public class QuickSort extends Sort{
+	
+	@Override
+	public void sort(int r[], int first, int end) {
+		int pivot;
+	    if (first < end)
+	    {
+	        pivot = partition(r, first, end);
+	        sort(r, first, pivot - 1);
+	        sort(r, pivot + 1, end);
+	    }
+	}
+	
+	public int partition(int r[], int first, int end) {
+		int i = first, j = end;
+	    while (i < j)
+	    {
+	        while (i < j && r[i] <= r[j]) j--;
+	        if(i < j)
+	        {
+	            int temp = r[i];
+	            r[i] = r[j];
+	            r[j] = temp;
+	            i++;
+	        }
+	        while (i < j && r[i] <= r[j]) i++;
+	        if(i < j)
+	        {
+	            int temp = r[i];
+	            r[i] = r[j];
+	            r[j] = temp;
+	            j--; 
+	        }
+	    }
+	    return i;
+	}
+}
+```
+Context充当环境类，它与抽象策略类之间建立关联关系
+```
+public class Context {
+	private Sort mSort;
+	
+	public void sort(int [] a) {
+		sort(a, 0, a.length - 1);
+	}
+	
+	public void sort(int [] a, int left, int right) {
+		mSort.sort(a, left, right);
+	}
+	
+	public void setSort(Sort mSort) {
+		this.mSort = mSort;
+	}
+}
+```
+客户端测试类：
+```
+public class Test {
+
+	public static void main(String[] args) {
+        int[] nums = {8, 3, 2, 6, 7, 1, 5, 4};
+        
+        Sort mSort;
+        Context context = new Context();
+        mSort = new QuickSort();
+        context.setSort(mSort);
+        context.sort(nums);
+        
+        for (int i : nums) {
+			System.out.print(i + "\t");
+		}
+
+	}
+}
+```
+运行结果为：
+
+> 1	2	3	4	5	6	7	8
+
+#### 四. 优缺点
+
+策略模式优点：
+1. 策略模式提供了对开闭原则的完美支持，用户可以在不修改原有系统的基础上选择算法与行为，也可以灵活地增加新的算法或行为
+2. 策略模式提供了管理相关的算法族的办法
+3. 策略模式提供了一种可以替换继承关系的办法
+4. 使用策略模式可以避免多重条件选择语句
+5. 策略模式提供了一种算法的复用机制，由于将算法单独提取出来封装在策略类中，因此不同的环境类可以方便地复用这些策略类
+
+策略模式缺点：
+1. 客户端必须知道所有的策略类，并自行决定使用哪一个策略类
+2. 策略模式将造成系统产生很多具体策略类
+3. 无法同时在客户端使用多个策略类
