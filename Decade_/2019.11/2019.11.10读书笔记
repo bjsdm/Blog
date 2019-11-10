@@ -1,0 +1,114 @@
+# 第3章 View 的事件体系（三）
+
+@(Android开发艺术探索)
+
+## 3.5 View 的滑动冲突
+
+### 3.5.1 常见的滑动冲突场景
+
+常见的滑动冲突可以简单分为如下三种：
+- 场景 1——外部滑动方向和内部滑动方向不一致
+- 场景 2——外部滑动方向和内部滑动方向一致
+- 场景 3——上面两种情况的嵌套
+
+从本质上来说，这三种滑动冲突场景的复杂度其实是相同的，因为它们的区别仅仅是滑动策略的不同，至于解决滑动冲突的方法，它们几个是通用的。
+
+### 3.5.2 滑动冲突的处理规则
+
+对于场景 1，它的处理规则是：**当用户左右滑动时，需要让外部的 View 拦截点击事件，当用户上下滑动时，需要让内部的 View 拦截点击事件**。这个时候我们就可以根据它们的特征来解决滑动冲突，具体来说是：根据滑动是水平滑动还是竖直滑动来判断到底由谁来拦截事件，根据滑动过程中两点坐标就可以得出到底是水平滑动还是竖直滑动。，如何根据坐标来得到滑动方向呢？这个很简单，可以根据滑动路径和水平方向所形成的夹角，也可以依据水平方向和竖直方向的距离差来判断，某些特殊的时候可以根据水平和竖直方向上的滑动速度差来判断。
+
+对于场景 2，比较特殊，它无法根据滑动的角度，距离差以及速度差来做判断。但是这个时候一般能在业务上找突破点，比如业务上有规定：当处于某种状态时需要外部 View 响应用户滑动，而处于另外一种状态时，需要内部 View 响应用户滑动。
+
+对于场景 3来说，它的滑动规则就更复杂了，和场景 2 一样无法通过滑动角度、距离差以及速度差来做判断，同样只能在业务上找突破点。
+
+### 3.5.3 滑动冲突的解决方式
+
+不管多复杂的滑动冲突，它们之间的区别仅仅是滑动规则不同而已。抛开滑动规则不说，我们需要找到一种不依赖具体滑动规则的通用的解决方法，在这里，根据场景 1 的情况得出通用的解决方案，然后场景 2 和 场景 3 我们只需要修改有关滑动规则的逻辑即可。
+
+在这里我们就要用到3.4节讲到的事件分发机制了。针对滑动冲突，这里给出两种解决滑动冲突的方案：外部拦截法和内部拦截法。
+
+#### 1. 外部拦截法
+
+所谓外部拦截法就是指点击事件都先经过父容器的拦截处理，如果父容器需要此事件就拦截，如果不需要此事件就不拦截，这样就可以解决滑动冲突的问题，这种方法比较符合事件分发机制。外部拦截法血药重写父容器的 onIntercceptTouchEvent 方法，在内部做相应的拦截即可，这种方法的伪代码如下：
+
+```
+public boolean onInterceptTouchEvent (MotionEvent event) {
+	boolean intercepted = false;
+	int x = (int) event.getX();
+	int y = (int) event.getY();
+	switch(event.getAction()) {
+		case MotionEvent.ACTION_DOWN:
+			intercepted = false;
+			break;
+		case MotionEvent.ACTION_MOVE:
+			if(父容器需要当前点击事件) {
+				intercepted = true;
+			} else {
+				intercepted = false;
+			}
+			break;
+		case MotionEvent.ACTION_UP:
+			intercepted = false;
+			break;
+		default:
+			break;		
+	}
+	mLastXIntercept = x;
+	mLastYIntercept = y;
+	return intercepted;
+}
+```
+
+上述代码是外部拦截法的典型逻辑，针对不同的滑动冲突场景，只需要修改父容器需要当前点击事件这个条件即可，其他均不需要修改也不能修改。
+
+1. 在 onInterceptTouchEvent 方法中，首先是 ACTION_DOWN 这个事件，父容器必须返回 false，也就是不拦截 ACTION_DOWN 这个事件，因为父容器一旦拦截了 ACTION_DWON 这个事件，那么后续的 ACTION_MOVE 和 ACTION_UP 都会默认直接交由父容器处理，这个事件就没法再传递给子元素了
+2. 其次是 ACTION_MOVE 事件，这个事件可以根据需要来决定是否拦截，如果父容器需要拦截就返回 true，否则就返回 fasle
+3. 最后是 ACTION_UP事件，这里必须要返回 fasle
+
+针对第三点，考虑这样一种情况，假设事件交由子元素处理，如果父容器在 ACTION_UP 时返回了 true，就会导致子元素无法接收到  ACTION_UP 事件，这个时候子元素中的 onCclick 事件就无法触发。但是父容器比较特殊，一旦它开始拦截事件，那么后续的事件都会交给它处理，而 ACTION_UP 作为最后一个事件也必定可以传递给父容器。
+
+#### 2. 内部拦截法
+
+内部拦截法是指父容器不拦截任何事件，所有的事件都传递给子元素，如果子元素需要此事件就直接消耗掉，否则就交由父容器进行处理，这种方法和 Android 中的事件分发机制不一致，需要配合 requestDisallowInterceptTouchEvent 方法才能正常工作，伪代码如下：
+
+```
+public boolean dispatchTouchEvent(MotionEvent event) {
+	int x = (int) event.getX();
+	int y = (int) event.getY();
+	switch(event.getAction()) {
+		case MotionEvent.ACTION_DOWN:
+			parent.requestDisallowInterceptTouchEvent(true);
+			break;
+		case MotionEvent.ACTION_MOVE:
+			int deltaX = x - mLastX;
+			int deltaY = y - mLastY;
+			if (父容器需要此类点击事件) {
+				parent.requestDisallowInterceptTouchEvent(false);
+			}
+			break;
+		case MotionEvent.ACTION_UP:
+			break;
+		default:
+			break;		
+	}
+	
+	mLastX = x;
+	mLastY = y;
+	return super.dispatchTouchEvent(event);
+}
+```
+
+上述代码是内部拦截法的典型代码，除了子元素需要做处理以外，父元素也要默认拦截除了 ACTION_DOWN 以外的其他事件，这样当子元素调用 parent.requestDisallowInteceptTouchEvent(false) 方法时，父元素才能继续拦截所需的事件
+
+为什么父容器不能拦截 ACTION_DOWN 事件呢？那是因为 ACTION_DOWN 事件并不受 FLAG_DISALLOW_INTERCEPT 这个标记位的控制，所以一旦父容器拦截 ACTION_DOWN 事件，那么所有的事件都无法传递到子元素中去，父元素所做的修改如下：
+
+```
+public boolean onInterceptTouchEvent(MotionEvent event) {
+	int action = event.getAction();
+	if(action == MotionEvent.ACTION_DOWN) {
+		return fasle;
+	} else {
+		return true;
+	}
+}
+```
