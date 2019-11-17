@@ -1,0 +1,230 @@
+# 第3章 View的事件体系（一）
+
+@(Android开发艺术探索)
+
+## 3.1 View 基础知识
+
+### 3.1.1 什么是 View
+
+View 是 Android 中所有控件的基类，所以说，View 是一种界面层的控件的一种抽象，他代表一个控件。除了 View，还有 ViewGroup， 它内部可以包含许多控件，即表示成一组 View。ViewGroup 也是继承了 View，这就意味着 View 本身可以是控件也可以是由多个控件组成的一组控件，通过这种关系就形成了 View 树的结构。
+
+### 3.1.2 View 的位置参数
+
+View 的位置参数主要由它的四个顶点来决定，分别对应于 View 的四个属性：**left**、**top**、**right**、**bottom**，其中 left 是左上角横坐标，top 是左上角纵坐标，right 是右下角横坐标，bottom 是右下角纵坐标。需要注意的是，**这些坐标都是相对于 View 的父容器来说的**，因此它是一种相对坐标。在 Android 中，x 轴和 y 轴的正方向分别为右和下。
+
+View 的宽高和坐标的关系：
+> width = right - left
+> height = bottom - top
+
+如何得到 View 的这四个属性呢？在 View 的源码中它们对应于 mLeft ，mRight,，mTop，mBottom 这四个成员变量，获取方式如下：
+
+- left = getLeft()
+- right = getRight()
+- top = getTop()
+- bottom = getBottom()
+
+从 Android 3.0 开始，View 增加了额外的几个参数，**x**、**y**、**translationX** 和 **translationY**，其中 x 和 y 是 View **左上角的坐标**，而 translationX 和 translationY 是 View **左上角相对于父容器的偏移量**。这几个参数也都是相对于父容器的坐标，并且 translationX 和 translationY 默认值为0，它们同样也有 get/set 方法，换算关系如下：
+
+> y = top + translationY
+
+需要注意的是，View 在平移的过程中，top 和 left 表示的是原始左上角的位置信息，其值不会发生改变，此时发生改变的值是 x、y、translationX 和 translationY 这四个参数。
+
+### 3.1.3 MotionEvent 和 TouchSlop
+
+####  1. MotionEvent
+
+在手指接触到屏幕后所产生的一系列事件中，典型的事件类型有如下几种：
+
+- **ACTION_DOWN**——手指刚接触屏幕
+- **ACTION_MOVE**——手指在屏幕上移动
+- **ACTION_UP**——手中从屏幕上松开的一瞬间
+
+正常情况下，一次手指触摸屏幕的行为会出发一系列点击事件，考虑如下几种情况：
+
+- 点击屏幕后离开松开，事件序列为DOWN->UP
+- 点击屏幕滑动一会再松开，事件序列为DOWN->MOVE...->MOVE->UP
+
+通过 MotionEvent 对象我们可以得到点击事件发生的 x 和 y 坐标。为此，系统提供了两组方法：getX/getY 和 getRawX/getRawY。**getX/getY 返回的是相对于当前 View 的左上角的 x 和 y 坐标，而 getRawX/getRawY 返回的是相对于手机屏幕左上角的 x 和 y 坐标**。
+
+#### 2. TouchSlop
+
+TouchSlop 是系统所能识别出的被认为滑动的最小距离，也就是说两次滑动之间的距离小于这个常量，那么系统就不认为你是在进行滑动操作。这是一个常量，**和设备有关**，在不同的设备上这个值可能是不同的，通过如下方式可以获得这个常量：**ViewConfiguration.get(getContext()).getScaledTouchSlop()**。
+
+### 3.14 VelocityTracker、GestureDetector 和 Scroller
+
+#### 1. VelocityTracker
+
+速度追踪，用于**追踪手指在滑动过程中的速度**，包括水平和竖直方向的速度。他使用的过程很简单，首先，在 View 的 onTouchEvent 方法种追踪当前单击事件的速度：
+
+```
+VelocityTracker velocityTracker = VelocityTracker.obtain();
+velocityTracker.addMovement(event);
+```
+
+接着，当我们想知道当前滑动速度时，这个时候可以采用如下方式来获得当前的速度：
+
+```
+velocityTracker.computeCurrentVelocity(1000);
+int xVelocity = (int) velocityTracker.getXVelocity();
+int yVelocity = (int) velocityTracker.getYVelocity();
+```
+
+这一步有两点需要注意，第一点，获取速度之前必须先计算速度，即 getXVelocity 和 getYVelocity 这两个方法前必须先调用 computeCurrentVelocity 方法，第二点，这里的速度是指一段之间内手指所滑过的像素数，比如将时间间隔设置为1000ms时，在1s内手指在水平方向上滑过的像素数是100，那么水平速度就是100。手指向左划时，水平方向上速度为负数，向右滑时，水平方向上速度为正数，竖直方向上同理。速度的计算可以用如下公式来表示：
+
+> 速度  = （终点位置 - 起点位置）/ 时间段
+
+最后，当不需要使用它的时候，需要调用 clear 方法来重置并回收内存：
+
+```
+velocityTracker.clear();
+velocityTracker.recycle();
+```
+
+#### 2. GestureDetector
+
+手势检测，用于辅助检测用户的单击、滑动、长按、双击等行为。要使用 GestureDetector 也并不复杂。
+
+首先，需要创建一个 GestureDetector 对象并实现 OnGestureListener 接口，根据需要我们还可以实现 onDoubleTapListener 从而能监听双击行为：
+
+```
+GestureDetector mGestureDetector = new GestureDetector(this);
+//解决长按屏幕后无法拖动的现象
+mGestureDetector.setIsLongpressEnabled(false);
+```
+
+接着，接管目标 View 的 onTouchEvent 方法，在待监听 View 的 onTouchEvent 方法中添加如下实现：
+
+```
+boolean consume = mGestureDetector.onTouchEvent(event);
+return consume;
+```
+
+完成上面两步后，我们就可以有选择的实现 OnGestureListener 和 OnDoubleTapListener 中的方法了：
+
+| 方法名      |     描述 |   所属接口   |
+| :-------- | :--------| :------: |
+| onDown    | 手指轻轻触摸屏幕的一瞬间，由1个 ACTION_DOWN 触发 |  OnGestureListener |
+| onShowPress    |   手指轻轻触摸屏幕，尚未松开或拖动，由1个 ACTION_DOWN 触发|  OnGestureListener |
+| onSingleTapUp|   手指(轻轻触摸屏幕后)松开，伴随着1个 ACTION_UP 而触发，这是单击行为|  OnGestureListener |
+| onScroll    |   手指按下屏幕并拖动，由1个 ACTION_DOWN，多个 ACTION_MOVE 触发，这是拖动行为|  OnGestureListener |
+| onLongPress    |   用户长按屏幕不妨，即长按|  OnGestureListener |
+| onFling    |   用户按下触摸屏，快速滑动后松开，由1个 ACTION_DOWN，多个 ACTION_MOVE 和 1个ACTION_UP 触发，这是快速滑动行为|  OnGestureListener |
+| onDoubleTap|   双击，由两次连续的单击组成，他不可能和 onSingleTapConfirmed 共存|  OnDoubleTapListener |
+| onSingleTapConfirmed|   严格的单击行为，注意它和 onSingleTapUp 的区别，如果触发了 onSingleTapConfirmed，那么后面不可能再紧跟着另一个单击欣慰，即这只可能是单击，而不可能是双击中的一次单击|  OnDoubleTapListener |
+| onDoubleTapEvent|   表示发生双击行为，在双击的期间，ACTION_DOWN，ACTION_MOVE 和 ACTION_UP 都会触发此回调|  OnDoubleTapListener |
+
+#### 3. Scroller
+
+弹性滑动对象，用于实现 View 的弹性滑动。Scroller 实现的是有过度效果的滑动，其过程不是瞬间完成的，而是在一定的时间间隔内完成的。Scroller 本身无法让 View 弹性滑动，它需要和 View 的 computeScroll 方法配合使用才能共同完成这个功能。那么如何使用 Scroller 呢？它的典型代码是固定的：
+
+```
+Scroller mScroller = new Scroller(mContext);
+
+//缓慢滑动到指定位置
+private void smoothScrollTo(int destX, int destY) {
+	int scrollX = getScrollX();
+	int delta = destX - scrollX;
+	//1000ms 内滑向 destX，效果就是慢慢滑动
+	mScroller.startScroll(scrollX, 0, delta, 0, 1000);
+	invalidate();
+}
+
+@Override
+public void computeScroll() {
+	if (mScroller.computeScrollOffset()) {
+		scrollTo(mScroller.getCurrX(), mScroller.getCurrY());
+		postInvalidate();
+	}
+}
+```
+
+## 3.2 View 的滑动
+
+通过三种方式可以实现 View 的滑动：
+- 第一种是通过 View 本身提供的 scrollTo/scrollBy 方法来实现滑动
+- 第二种是通过动画给 View 施加平移效果来实现滑动
+- 第三种是通过改变 View 的 LayoutParams 使得 View 重新布局从而实现滑动
+
+### 3.2.1 使用 scrollTo/scrollBy
+
+为了实现 View 的滑动，View 提供了专门的方法来实现这个功能，那就是 **scrollTo和scrollBy** ，看看这两个方法的实现：
+
+```
+/**
+     * Set the scrolled position of your view. This will cause a call to
+     * {@link #onScrollChanged(int, int, int, int)} and the view will be
+     * invalidated.
+     * @param x the x position to scroll to
+     * @param y the y position to scroll to
+     */
+    public void scrollTo(int x, int y) {
+        if (mScrollX != x || mScrollY != y) {
+            int oldX = mScrollX;
+            int oldY = mScrollY;
+            mScrollX = x;
+            mScrollY = y;
+            invalidateParentCaches();
+            onScrollChanged(mScrollX, mScrollY, oldX, oldY);
+            if (!awakenScrollBars()) {
+                postInvalidateOnAnimation();
+            }
+        }
+    }
+
+    /**
+     * Move the scrolled position of your view. This will cause a call to
+     * {@link #onScrollChanged(int, int, int, int)} and the view will be
+     * invalidated.
+     * @param x the amount of pixels to scroll by horizontally
+     * @param y the amount of pixels to scroll by vertically
+     */
+    public void scrollBy(int x, int y) {
+        scrollTo(mScrollX + x, mScrollY + y);
+    }
+```
+
+可以看出，scrollBy 实际上也是调用了 scrollTo 方法，它实现了基于当前位置的相对滑动，而 scrollTo 则实现了基于所传递参数的绝对滑动。我们需要理解滑动过程中 mScrollX 和 mScrollY 的改变规则，这两个属性可以分别通过 getScrollX 和 getScrollY 获得。
+
+在滑动过程中，mScrollX 的 值总是等于 View 左边缘和 View 内容的左边缘在水平方向上的距离，而 mScrollY 的值总是等于 View 上边缘和 View 内容的上边缘在竖直方向上的距离。scrollBy 和 scrollTo 只能改变 View 内容的位置而不能改变 View 在布局中的位置。mScrollX 和 mScrollY 的单位是像素，并且当 View 的左边缘在 View 内容左边缘的右边时，mScrollX 为正值，反之为负值；同样的，当 View 的上边缘在 View 内容的下边时，mScrollY 为正值。
+
+### 3.2.2 使用动画
+
+使用动画来移动 View ，主要操作的是 View 的 translationX 和 translationY 属性。
+
+采用 View 动画的代码，如下所示。此动画可以在100ms内将一个 View 从原始位置向右下角移动 100 个像素
+
+```
+<?xml version="1.0" encoding="utf-8"?>
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+	android:fillAfter="true"
+	android:zAdjusment="normal" >
+	<translate
+		android:duration="100"
+		android:fromXDelta="0"
+		android:fromYDelta="0"
+		android:interpolator="@android:anim/linear_interpolator"
+		android:toXDelta="100"
+		android:toYDelta="100" />
+```
+
+如果采用属性动画的话，那就更简单了，以下代码可以将一个 View 在100ms内从原来位置向右平移100像素。
+
+```
+ObjectAnimator.ofFloat(targetView, "translationX", 0, 100).setDuration(100).start();
+```
+
+使用动画来做 View 的滑动需要注意一点，View 动画是对 View 的影像做操作，它并不能真正改变 View 的位置参数，包括宽/高。而且 View 动画并不能真正改变 View 位置，基于这一点，我们不能简单地给一个 View 做平移动画并且还希望它在新位置继续出发一些单击事件。使用属性动画并不会存在上述问题。
+
+### 3.2.3 改变布局参数
+
+如果我们想把一个 Button 向右平移 100px，我们只需要将这个 Button 的 LayoutParams 里的 marginLeft 参数的值增加 100px 即可。如何重新设置一个 View 的 LayoutPraams 呢？很简单，如下所示：
+
+```
+MarginLayoutParams params = (MarginLayoutParams) mButton.getLayoutParams();
+params.width += 100;
+params.leftMargin += 100;
+mButton.requestLayout();
+//或者mButton.setLayoutParams(params);
+```
+
+
