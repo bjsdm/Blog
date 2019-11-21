@@ -1,0 +1,285 @@
+# 第3章 View 的事件体系（四）
+
+@(Android开发艺术探索)
+
+### 3.4.2 事件分发的源码解析
+
+#### 1. Activity 对点击事件的分发过程
+
+当一个点击操作发生时，事件最先传递给当前 Activity，由 Activity 的 dispatchTouchEvent 来进行事件派发，具体的工作是由 Activity 内部的 Window 来完成的。Window 会将事件传递给 decor view，decor view 一般就是当前界面的底层容器，通过 Activity.getWindow.getDecorView() 可以获得。
+
+首先从 Activity 的 dispatchTouchEvent 开始分析：
+
+```
+public boolean dispatchTouchEvent(MotionEvent ev) {
+    if (ev.getAction() == MotionEvent.ACTION_DOWN) {
+        onUserInteraction();
+    }
+    if (getWindow().superDispatchTouchEvent(ev)) {
+        return true;
+    }
+    return onTouchEvent(ev);
+}
+```
+
+首先事件开始交给 Activity 所附属的 Window 进行分发，如果返回 true，整个事件循环就结束了，返回 false 意味着事件没人处理，所有 View 的 onTouchEvent 都返回了 false，那么 Activity 的 onTouchEvent 就会被调用
+
+接下来看 Window 是如何将事件传递给 ViewGroup 的。Window 是一个抽象类，它的唯一实现类就是 PhoneWindow，因此接下来看一下 PhoneWindow 是如何处理点击事件的，如下所示：
+
+```
+public boolean superDispatchTouchEvent(MotionEvent event) {
+	return mDecor.superDispatchTouchEvent(event);
+}
+```
+
+PhoneWindow 将事件直接传递给了 DecorView，这个 mDecor 就是 getWindow().getDecorView() 返回的 View，而我们通过 setContentView 设置的 View 是它的一个子 View。目前事件传递到了 DecorView 这里，由于 DecorView 继承自 FrameLayout 且是父 View，所以最终事件会传递给 View。从这里开始，事件已经传递到顶级 View 了
+
+#### 2. 顶级 View 对点击事件的分发过程
+
+首先看 ViewGroup 对点击事件的分发过程，其主要实现在 ViewGroup 的dispatchTouchEvent 方法中，这个方法比较长，这里分段说明。先看下面一段：
+
+```
+final boolean intercepted;
+if (actionMasked == MotionEvent.ACTION_DOWN || mFirstTouchTarget != null) {
+	final boolean disallowIntercept = (mGroupFlags & FLAG_DISALLOW_INTERCEPT) != 0;
+	if (!disallowIntercept) {
+		intercepted = onInterceptTouchEvent(ev);
+		ev.setAction(action); // restore action in case it was changed
+	} else {
+		intercepted = false;
+	}
+} else {
+	// There are no touch targets and this action is not an initial down
+	// so this view group continues to intercept touches.
+	intercepted = true;
+}
+```
+
+从上面代码我们可以看出，ViewGroup 在如下两种情况下会判断是否要拦截当前事件：事件类型为ACTION_DOWN 或者 mFirstTouchTarget != null。当事件由 ViewGroup 的子元素成功处理时，mFirstTouchTarget 会被赋值并指向子元素。所**以，一旦事件由当前 ViewGroup 拦截时，mFirstTouchTarget != null 就不成立**。那么当 ACTION_MOVE 和 ACTION_UP 事件到来时，由于（actionMasked == MotionEvent.ACTION_DOWN || mFirstTouchTarget != null）条件为 false，将导致 ViewGroup 的 onInterceptTouchEvent 不会再被调用，并且同一事件序列中的其他事件都会交给它处理
+
+还有一种特殊情况，那就是 **FLAG_DISALLOW_INTERCEPT** 标记位，这个标记位是通过 requestDisallowInterceptTouchEvent 方法来设置的。FLAG_DISALLOW_INTERCEPT 一旦设置后，ViewGroup 将无法拦截除了 ACTION_DOWN 以外的其他点击事件。为什么是除了 ACTION_DOWN  以外呢？因为在 ViewGroup 分发事件的时候，如果是 ACTION_DOWN 就会重置 FLAG_DISALLOW_INTERCEPT 这个标记位。因此，当面对 ACTION_DOWN 事件时， ViewGroup 总是先调用自己的 onInterceptTouchEvent 来询问自己是否拦截这个事件，从源码中可以看出 VIewGroup 对这个标记位的重置：
+
+```
+ // Handle an initial down.
+if (actionMasked == MotionEvent.ACTION_DOWN) {
+	// Throw away all previous state when starting a new touch gesture.
+	// The framework may have dropped the up or cancel event for the previous gesture
+	// due to an app switch, ANR, or some other state change.
+	cancelAndClearTouchTargets(ev);
+	resetTouchState();
+}
+```
+
+从上面的源码分析我们可以得出结论：第一点，onInterceptTouchEvent 不是每次事件都会被调用，如果我们想提前处理所有的点击事件，要选择 dispatchTouchEvent 方法，只有这个方法能确保每次都会被调用。另外一点，FLAG_DISALLOW_INTERCEPT 标记位的作用给我们提供了一个思路，当面对滑动冲突时，可以考虑用这种方法。
+
+接着当 ViewGroup 不拦截事件的时候，事件回向下分发交由它的子 View 处理：
+
+```
+final View[] children = mChildren;
+for (int i = childrenCount - 1; i >= 0; i--) {
+	final int childIndex = getAndVerifyPreorderedIndex(childrenCount, i, customOrder);
+	final View child = getAndVerifyPreorderedView(preorderedList, children, childIndex);
+	if (!canViewReceivePointerEvents(child)
+			|| !isTransformedTouchPointInView(x, y, child, null)) {
+		ev.setTargetAccessibilityFocus(false);
+		continue;
+	}
+	
+	newTouchTarget = getTouchTarget(child);
+	if (newTouchTarget != null) {
+		// Child is already receiving touch within its bounds.
+		// Give it the new pointer in addition to the ones it is handling.
+		newTouchTarget.pointerIdBits |= idBitsToAssign;
+		break;
+	}
+
+	resetCancelNextUpFlag(child);
+	if (dispatchTransformedTouchEvent(ev, false, child, idBitsToAssign)) {
+		// Child wants to receive touch within its bounds.
+		mLastTouchDownTime = ev.getDownTime();
+		if (preorderedList != null) {
+		// childIndex points into presorted list, find original index
+		for (int j = 0; j < childrenCount; j++) {
+			if (children[childIndex] == mChildren[j]) {
+				mLastTouchDownIndex = j;
+				break;
+			}
+		}
+	} else {
+		mLastTouchDownIndex = childIndex;
+	}
+	mLastTouchDownX = ev.getX();
+	mLastTouchDownY = ev.getY();
+	newTouchTarget = addTouchTarget(child, idBitsToAssign);
+	alreadyDispatchedToNewTouchTarget = true;
+	break;
+}
+```
+
+上面的代码也很清晰，首先遍历 ViewGroup 的所有子元素，注意，**这里是从后往前开始遍历的**，然后判断子元素能否接收到点击事件。是否能接收点击事件的衡量条件为：**子元素是否在播放动画和点击事件的坐标是否落在子元素的区域内**。dispatchTransformedTouchEvent 实际上调用的就是子元素的 dispatchTouchEvent，这样事件就交由子元素处理了，从而完成了一轮事件分发
+
+```
+if (child == null) {
+	handled = super.dispatchTouchEvent(event);
+} else {
+	handled = child.dispatchTouchEvent(event);
+}
+```
+
+如果子元素的 dispatchTouchEvent 返回 true ，那么 mFirstTouchTarget 就会被赋值同时跳出 for 循环
+
+```
+newTouchTarget = addTouchTarget(child, idBitsToAssign);
+alreadyDispatchedToNewTouchTarget = true;
+break;
+```
+
+mFIrstTouchTarget 真正赋值过程是在 addTouchTarget 内部完成的，mFIrstTouchTarget 其实是一种单链表结构，mFirstTouchTarget 是否被赋值直接影响到 ViewGroup 对事件的拦截策略
+
+```
+private TouchTarget addTouchTarget(@NonNull View child, int pointerIdBits) {
+	final TouchTarget target = TouchTarget.obtain(child, pointerIdBits);
+	target.next = mFirstTouchTarget;
+	mFirstTouchTarget = target;
+	return target;
+}
+```
+
+如果遍历所有子元素后事件都没有被合适地处理，这包含两种情况：第一种是 ViewGroup 没有子元素，第二种是子元素处理了点击事件，但是在 dispatchTouchEvent 中返回了 false，这一般是因为子元素在 onTouchEvent 中返回了 false，这两种情况下 ViewGroup 会自己处理点击事件
+
+```
+if (mFirstTouchTarget == null) {
+	// No touch targets so treat this as an ordinary view.
+	handled = dispatchTransformedTouchEvent(ev, canceled, null,
+			TouchTarget.ALL_POINTER_IDS);
+}
+```
+
+可以看到上面的代码中，第三个参数 child 为 null，从前面的分析可以知道，它会调用 super.dispatchTouchEvent(event)
+
+#### 4. View 对点击事件的处理过程
+
+View 对点击事件的处理过程稍微简单一点，这里的 View 不包含 ViewGroup。先看 dispatchTouchEvent 方法：
+
+```
+public boolean dispatchTouchEvent(MotionEvent event) {
+	boolean result = false;
+	...
+
+	if (onFilterTouchEventForSecurity(event)) {
+		//noinspection SimplifiableIfStatement
+		ListenerInfo li = mListenerInfo;
+		if (li != null && li.mOnTouchListener != null
+				&& (mViewFlags & ENABLED_MASK) == ENABLED
+				&& li.mOnTouchListener.onTouch(this, event)) {
+			result = true;
+		}
+		
+		if (!result && onTouchEvent(event)) {
+			result = true;
+		}
+	}
+	...
+	
+	return result;
+}
+```
+
+因为 View 是一个单独的元素，它没有子元素因此无法向下传递事件，只能自己处理事件。从上面可以看出 View 对事件的处理过程，首先会判断有没有设置 OnTouchListener，如果 OnTouchListener 中的 OnTouchEvent 方法返回 true，那么 onTouchEvent 就不会被调用，可以看出 OnTouchListener 的优先级高于 onTouchEvent。
+
+接着再看 onTouchEvent 的实现。先看当 View 处于不可点击状态下点击事件的处理过程，如下所示。很显然，不可用状态下的 View 照样会消耗点击事件。
+
+```
+final boolean clickable = ((viewFlags & CLICKABLE) == CLICKABLE
+                || (viewFlags & LONG_CLICKABLE) == LONG_CLICKABLE)
+                || (viewFlags & CONTEXT_CLICKABLE) == CONTEXT_CLICKABLE;
+
+if ((viewFlags & ENABLED_MASK) == DISABLED) {
+	if (action == MotionEvent.ACTION_UP && (mPrivateFlags & PFLAG_PRESSED) != 0) {
+		setPressed(false);
+	}
+	mPrivateFlags3 &= ~PFLAG3_FINGER_DOWN;
+	// A disabled view that is clickable still consumes the touch
+	// events, it just doesn't respond to them.
+	return clickable;
+}
+```
+
+接着，如果 View 设置有代理，那么还会执行 TouchDelegate 的 onTouchEvent 方法，这个 onTouchEvent 的工作机制看起来和 OnTouchListener 类似，这里不深入研究了
+
+```
+if (mTouchDelegate != null) {
+	if (mTouchDelegate.onTouchEvent(event)) {
+		return true;
+	}
+}
+```
+
+下面看一下 onTouchEvent 中对点击事件的具体处理，如下所示：
+
+```
+if (clickable || (viewFlags & TOOLTIP) == TOOLTIP) {
+	switch (action) {
+		case MotionEvent.ACTION_UP:
+			boolean prepressed = (mPrivateFlags & PFLAG_PREPRESSED) != 0;
+			if (!mHasPerformedLongPress && !mIgnoreNextUpEvent) {
+				// This is a tap, so remove the longpress check
+				removeLongPressCallback();
+
+				// Only perform take click actions if we were in the pressed state
+				if (!focusTaken) {
+					// Use a Runnable and post this rather than calling
+					// performClick directly. This lets other visual state
+					// of the view update before click actions start.
+					if (mPerformClick == null) {
+						mPerformClick = new PerformClick();
+					}
+					if (!post(mPerformClick)) {
+						performClick();
+					}
+				}
+			}
+			break;
+	}
+	...
+	return true;
+}
+```
+
+从上面的代码来看，只要 View 的 CLICKABLE 、 LONG_CLICKABLE 和 CONTEXT_CLICKABLE 有一个为 true，那么它就会消耗这个事件，即 onTouchEvent 返回 true，不管它是否是 DISABLE 状态。接着当 ACTION_UP 事件发生时，会触发 performClick 方法，如果 View 设置了 OnClickListener，那么 performClick 方法内部会调用它的 onClick 方法：
+
+```
+public boolean performClick() {
+	final boolean result;
+	final ListenerInfo li = mListenerInfo;
+	if (li != null && li.mOnClickListener != null) {
+		playSoundEffect(SoundEffectConstants.CLICK);
+		li.mOnClickListener.onClick(this);
+		result = true;
+	} else {
+		result = false;
+	}
+
+	sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_CLICKED);
+	notifyEnterOrExitForAutoFillIfNeeded(true);
+	return result;
+}
+```
+
+View 的 LONG_CLICKABLE 属性默认为 false，可点击的 View 的 CLICKABLE 为 true，不可点击的 View 其 CLICKABLE 为 false。通过 setClickable 和 setLongClickable 可以分别改变 View 的这两个属性。另外 setOnClickListener 会自动将 CLICKABLE 设为 true，setOnLongClickListener 则会自动将 View 的 LONG_CLICKABLE 设为 true
+
+```
+public void setOnClickListener(@Nullable OnClickListener l) {
+	if (!isClickable()) {
+		setClickable(true);
+	}
+	getListenerInfo().mOnClickListener = l;
+}
+
+public void setOnLongClickListener(@Nullable OnLongClickListener l) {
+	if (!isLongClickable()) {
+		setLongClickable(true);
+	}
+	getListenerInfo().mOnLongClickListener = l;
+}
+```
